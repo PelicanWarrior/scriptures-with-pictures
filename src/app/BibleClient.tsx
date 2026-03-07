@@ -8,6 +8,11 @@ import { BibleBook, ChapterData, VerseImageEntry } from "@/lib/types";
 type ViewLevel = "books" | "chapters" | "chapter";
 type MainTab = "bible" | "upload";
 
+interface BeforeInstallPromptEvent extends Event {
+  prompt: () => Promise<void>;
+  userChoice: Promise<{ outcome: "accepted" | "dismissed"; platform: string }>;
+}
+
 interface SaveFormState {
   bookId: string;
   chapter: string;
@@ -54,6 +59,10 @@ export function BibleClient(): ReactElement {
   const [formState, setFormState] = useState<SaveFormState>(INITIAL_FORM_STATE);
   const [saveMessage, setSaveMessage] = useState<string>("");
   const [saveError, setSaveError] = useState<string>("");
+  const [deferredPrompt, setDeferredPrompt] = useState<BeforeInstallPromptEvent | null>(null);
+  const [isInstalled, setIsInstalled] = useState(false);
+  const [isInstalling, setIsInstalling] = useState(false);
+  const [installMessage, setInstallMessage] = useState<string>("");
 
   const view: ViewLevel = useMemo(() => {
     if (chapterData) {
@@ -108,6 +117,50 @@ export function BibleClient(): ReactElement {
   useEffect(() => {
     void loadBooks();
   }, [loadBooks]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    const mediaQuery = window.matchMedia("(display-mode: standalone)");
+    const navigatorWithStandalone = navigator as Navigator & { standalone?: boolean };
+
+    const syncInstalledState = (): void => {
+      const standalone = mediaQuery.matches || navigatorWithStandalone.standalone === true;
+      setIsInstalled(standalone);
+    };
+
+    const onBeforeInstallPrompt = (event: Event): void => {
+      event.preventDefault();
+      setDeferredPrompt(event as BeforeInstallPromptEvent);
+      setInstallMessage("");
+    };
+
+    const onAppInstalled = (): void => {
+      setDeferredPrompt(null);
+      setIsInstalled(true);
+      setInstallMessage("App installed successfully.");
+    };
+
+    syncInstalledState();
+
+    if ("serviceWorker" in navigator) {
+      navigator.serviceWorker.register("/sw.js").catch(() => {
+        // Install still works without caching if registration fails.
+      });
+    }
+
+    window.addEventListener("beforeinstallprompt", onBeforeInstallPrompt);
+    window.addEventListener("appinstalled", onAppInstalled);
+    mediaQuery.addEventListener("change", syncInstalledState);
+
+    return () => {
+      window.removeEventListener("beforeinstallprompt", onBeforeInstallPrompt);
+      window.removeEventListener("appinstalled", onAppInstalled);
+      mediaQuery.removeEventListener("change", syncInstalledState);
+    };
+  }, []);
 
   async function loadChapters(book: BibleBook): Promise<void> {
     setLoading(true);
@@ -244,18 +297,62 @@ export function BibleClient(): ReactElement {
     setActiveTab("upload");
   }
 
+  async function handleInstallClick(): Promise<void> {
+    setInstallMessage("");
+
+    if (isInstalled) {
+      setInstallMessage("App is already installed on this device.");
+      return;
+    }
+
+    if (!deferredPrompt) {
+      setInstallMessage(
+        "Install prompt is not available in this browser right now. Use your browser menu and choose Add to Home Screen.",
+      );
+      return;
+    }
+
+    setIsInstalling(true);
+
+    try {
+      await deferredPrompt.prompt();
+      const choice = await deferredPrompt.userChoice;
+
+      if (choice.outcome === "accepted") {
+        setInstallMessage("Install request accepted.");
+      } else {
+        setInstallMessage("Install canceled.");
+      }
+
+      setDeferredPrompt(null);
+    } finally {
+      setIsInstalling(false);
+    }
+  }
+
   return (
     <main className="page">
       <section className="panel header">
         <div className="headerTop">
           <h1 className="title">Scriptures with Pictures</h1>
-          {activeTab === "bible" && view !== "books" ? (
-            <button type="button" className="backButton" onClick={handleBack}>
-              Back
+          <div className="headerActions">
+            {activeTab === "bible" && view !== "books" ? (
+              <button type="button" className="backButton" onClick={handleBack}>
+                Back
+              </button>
+            ) : null}
+            <button
+              type="button"
+              className="primaryButton installButton"
+              onClick={() => void handleInstallClick()}
+              disabled={isInstalling}
+            >
+              {isInstalled ? "Installed" : isInstalling ? "Installing..." : "Install App"}
             </button>
-          ) : null}
+          </div>
         </div>
         <div className="location">{locationLabel}</div>
+        {installMessage ? <p className="installHint">{installMessage}</p> : null}
         <div className="tabs">
           <button
             type="button"

@@ -56,6 +56,13 @@ main.page {
   flex-wrap: wrap;
 }
 
+.headerActions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
 .title {
   margin: 0;
   font-size: clamp(1.4rem, 2.2vw, 2.1rem);
@@ -104,6 +111,26 @@ main.page {
   color: #fff;
   font-size: 0.95rem;
   cursor: pointer;
+}
+
+.primaryButton:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+
+.installButton {
+  background: #8a4f17;
+}
+
+.installButton:hover {
+  background: #6f3e12;
+}
+
+.installHint {
+  margin-top: 8px;
+  margin-bottom: 0;
+  font-size: 0.9rem;
+  color: var(--muted);
 }
 
 .backButton:hover,
