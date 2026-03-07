@@ -30,3 +30,4 @@ next-env.d.ts
 
 # local data
 temp_*.html
+data/bible-cache.json

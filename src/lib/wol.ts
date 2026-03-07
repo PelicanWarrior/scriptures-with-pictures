@@ -1,7 +1,11 @@
 import * as cheerio from "cheerio";
+import { getCachedBibleData } from "@/lib/bible-cache";
 import { BibleBook, ChapterData } from "@/lib/types";
 
 const WOL_BOOKS_URL = "https://wol.jw.org/en/wol/binav/r1/lp-e";
+const BOOKS_CACHE_MAX_AGE_MS = 1000 * 60 * 60 * 24;
+const CHAPTER_LIST_CACHE_MAX_AGE_MS = 1000 * 60 * 60 * 24;
+const CHAPTER_DATA_CACHE_MAX_AGE_MS = 1000 * 60 * 60 * 24 * 7;
 
 const CANONICAL_BOOK_NAMES: Record<number, string> = {
   1: "Genesis",
@@ -106,7 +110,7 @@ function getChapterUrl(bookId: number, chapter: number): string {
   return `https://wol.jw.org/en/wol/b/r1/lp-e/nwtsty/${bookId}/${chapter}`;
 }
 
-export async function getBibleBooks(): Promise<BibleBook[]> {
+async function loadBibleBooksFromSource(): Promise<BibleBook[]> {
   const html = await fetchWolHtml(WOL_BOOKS_URL);
   const $ = cheerio.load(html);
   const booksMap = new Map<number, BibleBook>();
@@ -137,7 +141,15 @@ export async function getBibleBooks(): Promise<BibleBook[]> {
   return Array.from(booksMap.values()).sort((a, b) => a.id - b.id);
 }
 
-export async function getBookChapters(bookId: number): Promise<number[]> {
+export async function getBibleBooks(): Promise<BibleBook[]> {
+  return getCachedBibleData({
+    key: "books",
+    maxAgeMs: BOOKS_CACHE_MAX_AGE_MS,
+    loader: loadBibleBooksFromSource,
+  });
+}
+
+async function loadBookChaptersFromSource(bookId: number): Promise<number[]> {
   if (!Number.isInteger(bookId) || bookId < 1 || bookId > 66) {
     throw new Error("Invalid book id");
   }
@@ -164,6 +176,14 @@ export async function getBookChapters(bookId: number): Promise<number[]> {
   return Array.from(chapters).sort((a, b) => a - b);
 }
 
+export async function getBookChapters(bookId: number): Promise<number[]> {
+  return getCachedBibleData({
+    key: `book:${bookId}:chapters`,
+    maxAgeMs: CHAPTER_LIST_CACHE_MAX_AGE_MS,
+    loader: () => loadBookChaptersFromSource(bookId),
+  });
+}
+
 function parseBookName($: cheerio.CheerioAPI, bookId: number, chapter: number): string {
   const canonical = CANONICAL_BOOK_NAMES[bookId];
   if (canonical) {
@@ -187,7 +207,7 @@ function parseBookName($: cheerio.CheerioAPI, bookId: number, chapter: number): 
   return `Book ${bookId}`;
 }
 
-export async function getChapterData(bookId: number, chapter: number): Promise<ChapterData> {
+async function loadChapterDataFromSource(bookId: number, chapter: number): Promise<ChapterData> {
   if (!Number.isInteger(bookId) || bookId < 1 || bookId > 66) {
     throw new Error("Invalid book id");
   }
@@ -240,4 +260,12 @@ export async function getChapterData(bookId: number, chapter: number): Promise<C
     chapter,
     verses,
   };
+}
+
+export async function getChapterData(bookId: number, chapter: number): Promise<ChapterData> {
+  return getCachedBibleData({
+    key: `book:${bookId}:chapter:${chapter}`,
+    maxAgeMs: CHAPTER_DATA_CACHE_MAX_AGE_MS,
+    loader: () => loadChapterDataFromSource(bookId, chapter),
+  });
 }

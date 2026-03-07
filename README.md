@@ -30,3 +30,5 @@ npm run build
 - See markers next to verses that have linked pictures.
 - Click a verse to show its linked image and caption.
 - See current location at the top (`Book` or `Book Chapter N`) and use back navigation.
+- Uses local scripture cache (`data/bible-cache.json`) for fast reloads.
+- Automatically checks and refreshes cached scriptures in the background when data gets stale.
