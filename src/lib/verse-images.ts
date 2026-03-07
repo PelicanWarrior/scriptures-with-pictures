@@ -7,40 +7,134 @@ interface VerseImageStore {
 }
 
 const STORE_PATH = path.join(process.cwd(), "data", "verse-images.json");
+const TMP_STORE_PATH = path.join("/tmp", "scriptures-with-pictures", "verse-images.json");
+const blockedPaths = new Set<string>();
+let resolvedStorePath: string | null = null;
+let memoryStore: VerseImageStore = { entries: [] };
 
 function makeKey(bookId: number, chapter: number, verse: number): string {
   return `${bookId}:${chapter}:${verse}`;
 }
 
-async function ensureStoreExists(): Promise<void> {
-  const dir = path.dirname(STORE_PATH);
+function isErrno(error: unknown): error is NodeJS.ErrnoException {
+  return typeof error === "object" && error !== null && "code" in error;
+}
+
+function isReadOnlyFsError(error: unknown): boolean {
+  if (!isErrno(error)) {
+    return false;
+  }
+
+  return error.code === "EROFS" || error.code === "EACCES" || error.code === "EPERM";
+}
+
+function getCandidatePaths(): string[] {
+  const overridePath = process.env.VERSE_IMAGES_PATH;
+  const all = [overridePath, STORE_PATH, TMP_STORE_PATH].filter(
+    (candidate): candidate is string => Boolean(candidate),
+  );
+
+  const deduped = Array.from(new Set(all));
+  return deduped.filter((candidate) => !blockedPaths.has(candidate));
+}
+
+async function ensureStoreExists(storePath: string): Promise<void> {
+  const dir = path.dirname(storePath);
   await mkdir(dir, { recursive: true });
 
   try {
-    await readFile(STORE_PATH, "utf8");
-  } catch {
+    await readFile(storePath, "utf8");
+  } catch (error) {
+    if (isErrno(error) && error.code !== "ENOENT") {
+      throw error;
+    }
+
     const initial: VerseImageStore = { entries: [] };
-    await writeFile(STORE_PATH, JSON.stringify(initial, null, 2), "utf8");
+    await writeFile(storePath, JSON.stringify(initial, null, 2), "utf8");
   }
 }
 
+async function resolveStorePath(): Promise<string | null> {
+  if (resolvedStorePath && !blockedPaths.has(resolvedStorePath)) {
+    return resolvedStorePath;
+  }
+
+  const candidates = getCandidatePaths();
+
+  for (const candidate of candidates) {
+    try {
+      await ensureStoreExists(candidate);
+      resolvedStorePath = candidate;
+      return candidate;
+    } catch (error) {
+      if (isReadOnlyFsError(error)) {
+        blockedPaths.add(candidate);
+      }
+    }
+  }
+
+  resolvedStorePath = null;
+  return null;
+}
+
 async function readStore(): Promise<VerseImageStore> {
-  await ensureStoreExists();
-  const raw = await readFile(STORE_PATH, "utf8");
+  const storePath = await resolveStorePath();
+  if (!storePath) {
+    return memoryStore;
+  }
+
+  let raw = "";
+
+  try {
+    raw = await readFile(storePath, "utf8");
+  } catch (error) {
+    if (isReadOnlyFsError(error)) {
+      blockedPaths.add(storePath);
+      if (resolvedStorePath === storePath) {
+        resolvedStorePath = null;
+      }
+      return memoryStore;
+    }
+
+    return memoryStore;
+  }
 
   try {
     const parsed = JSON.parse(raw) as VerseImageStore;
-    return {
+    const normalized = {
       entries: Array.isArray(parsed.entries) ? parsed.entries : [],
     };
+
+    memoryStore = normalized;
+    return normalized;
   } catch {
-    return { entries: [] };
+    return memoryStore;
   }
 }
 
 async function writeStore(store: VerseImageStore): Promise<void> {
-  await ensureStoreExists();
-  await writeFile(STORE_PATH, JSON.stringify(store, null, 2), "utf8");
+  memoryStore = store;
+
+  let storePath = await resolveStorePath();
+  for (let attempt = 0; attempt < 2 && storePath; attempt += 1) {
+    try {
+      await ensureStoreExists(storePath);
+      await writeFile(storePath, JSON.stringify(store, null, 2), "utf8");
+      return;
+    } catch (error) {
+      if (isReadOnlyFsError(error)) {
+        blockedPaths.add(storePath);
+        if (resolvedStorePath === storePath) {
+          resolvedStorePath = null;
+        }
+
+        storePath = await resolveStorePath();
+        continue;
+      }
+
+      return;
+    }
+  }
 }
 
 export function isValidImageUrl(value: string): boolean {

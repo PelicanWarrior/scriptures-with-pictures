@@ -33,3 +33,4 @@ npm run build
 - Uses local scripture cache (`data/bible-cache.json`) for fast reloads.
 - Automatically checks and refreshes cached scriptures in the background when data gets stale.
 - In read-only hosting environments, cache automatically falls back to `/tmp/scriptures-with-pictures/bible-cache.json` or in-memory.
+- In read-only hosting environments, verse image storage falls back to `/tmp/scriptures-with-pictures/verse-images.json` or in-memory.
