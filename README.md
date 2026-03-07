@@ -32,3 +32,4 @@ npm run build
 - See current location at the top (`Book` or `Book Chapter N`) and use back navigation.
 - Uses local scripture cache (`data/bible-cache.json`) for fast reloads.
 - Automatically checks and refreshes cached scriptures in the background when data gets stale.
+- In read-only hosting environments, cache automatically falls back to `/tmp/scriptures-with-pictures/bible-cache.json` or in-memory.

@@ -21,7 +21,11 @@ interface CachedDataOptions<T> {
 }
 
 const STORE_PATH = path.join(process.cwd(), "data", "bible-cache.json");
+const TMP_STORE_PATH = path.join("/tmp", "scriptures-with-pictures", "bible-cache.json");
 const inFlightRefreshes = new Map<string, Promise<void>>();
+let resolvedStorePath: string | null = null;
+let fileStoreDisabled = false;
+let memoryStore: BibleCacheStore = createInitialStore();
 
 function createInitialStore(): BibleCacheStore {
   return {
@@ -47,36 +51,109 @@ function getAgeMs(isoDate: string): number {
   return Date.now() - parsed;
 }
 
-async function ensureStoreExists(): Promise<void> {
-  await mkdir(path.dirname(STORE_PATH), { recursive: true });
+function isErrno(error: unknown): error is NodeJS.ErrnoException {
+  return typeof error === "object" && error !== null && "code" in error;
+}
+
+function isReadOnlyFsError(error: unknown): boolean {
+  if (!isErrno(error)) {
+    return false;
+  }
+
+  return error.code === "EROFS" || error.code === "EACCES" || error.code === "EPERM";
+}
+
+async function ensureStoreExists(storePath: string): Promise<void> {
+  await mkdir(path.dirname(storePath), { recursive: true });
 
   try {
-    await readFile(STORE_PATH, "utf8");
-  } catch {
-    await writeFile(STORE_PATH, JSON.stringify(createInitialStore(), null, 2), "utf8");
+    await readFile(storePath, "utf8");
+  } catch (error) {
+    if (isErrno(error) && error.code === "ENOENT") {
+      await writeFile(storePath, JSON.stringify(createInitialStore(), null, 2), "utf8");
+      return;
+    }
+
+    throw error;
   }
 }
 
+async function resolveStorePath(): Promise<string | null> {
+  if (fileStoreDisabled) {
+    return null;
+  }
+
+  if (resolvedStorePath) {
+    return resolvedStorePath;
+  }
+
+  const overridePath = process.env.BIBLE_CACHE_PATH;
+  const candidates = [overridePath, STORE_PATH, TMP_STORE_PATH].filter(
+    (candidate): candidate is string => Boolean(candidate),
+  );
+
+  for (const candidate of candidates) {
+    try {
+      await ensureStoreExists(candidate);
+      resolvedStorePath = candidate;
+      return candidate;
+    } catch (error) {
+      if (isReadOnlyFsError(error)) {
+        continue;
+      }
+
+      continue;
+    }
+  }
+
+  fileStoreDisabled = true;
+  return null;
+}
+
 async function readStore(): Promise<BibleCacheStore> {
-  await ensureStoreExists();
+  const storePath = await resolveStorePath();
+  if (!storePath) {
+    return memoryStore;
+  }
 
   try {
-    const raw = await readFile(STORE_PATH, "utf8");
+    const raw = await readFile(storePath, "utf8");
     const parsed = JSON.parse(raw) as BibleCacheStore;
 
     if (parsed?.version !== 1 || typeof parsed.entries !== "object" || !parsed.entries) {
       return createInitialStore();
     }
 
+    memoryStore = parsed;
     return parsed;
-  } catch {
+  } catch (error) {
+    if (isReadOnlyFsError(error)) {
+      fileStoreDisabled = true;
+      resolvedStorePath = null;
+      return memoryStore;
+    }
+
     return createInitialStore();
   }
 }
 
 async function writeStore(store: BibleCacheStore): Promise<void> {
-  await ensureStoreExists();
-  await writeFile(STORE_PATH, JSON.stringify(store, null, 2), "utf8");
+  memoryStore = store;
+
+  const storePath = await resolveStorePath();
+  if (!storePath) {
+    return;
+  }
+
+  try {
+    await ensureStoreExists(storePath);
+    await writeFile(storePath, JSON.stringify(store, null, 2), "utf8");
+  } catch (error) {
+    if (isReadOnlyFsError(error)) {
+      fileStoreDisabled = true;
+      resolvedStorePath = null;
+    }
+  }
 }
 
 async function refreshEntryInBackground<T>(
