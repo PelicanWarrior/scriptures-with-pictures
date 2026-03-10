@@ -46,6 +46,9 @@ main.page {
 .header {
   padding: 16px;
   margin-bottom: 14px;
+  position: sticky;
+  top: 0;
+  z-index: 30;
 }
 
 .headerTop {
