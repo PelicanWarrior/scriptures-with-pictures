@@ -36,6 +36,37 @@ main.page {
   padding: 20px 16px 48px;
 }
 
+main.page.pageWithContextDock {
+  padding-top: calc(20px + 64px);
+}
+
+.contextDock {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 80;
+  background: rgba(255, 248, 235, 0.96);
+  border-bottom: 1px solid var(--line);
+  backdrop-filter: blur(4px);
+}
+
+.contextDockInner {
+  max-width: 1100px;
+  margin: 0 auto;
+  min-height: 64px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 16px;
+}
+
+.contextDockLabel {
+  font-weight: 700;
+  color: var(--ink);
+}
+
 .panel {
   background: var(--surface);
   border: 1px solid var(--line);
@@ -46,9 +77,6 @@ main.page {
 .header {
   padding: 16px;
   margin-bottom: 14px;
-  position: sticky;
-  top: 0;
-  z-index: 30;
 }
 
 .headerTop {

@@ -113,6 +113,7 @@ export function BibleClient(): ReactElement {
   const [isInstalled, setIsInstalled] = useState(false);
   const [isInstalling, setIsInstalling] = useState(false);
   const [installMessage, setInstallMessage] = useState<string>("");
+  const showContextDock = activeTab === "bible";
 
   const view: ViewLevel = useMemo(() => {
     if (chapterData) {
@@ -415,16 +416,24 @@ export function BibleClient(): ReactElement {
   }
 
   return (
-    <main className="page">
-      <section className="panel header">
-        <div className="headerTop">
-          <h1 className="title">Scriptures with Pictures</h1>
-          <div className="headerActions">
-            {activeTab === "bible" && view !== "books" ? (
+    <main className={`page ${showContextDock ? "pageWithContextDock" : ""}`}>
+      {showContextDock ? (
+        <section className="contextDock" aria-label="Current Bible location">
+          <div className="contextDockInner">
+            <div className="contextDockLabel">{locationLabel}</div>
+            {view !== "books" ? (
               <button type="button" className="backButton" onClick={handleBack}>
                 Back
               </button>
             ) : null}
+          </div>
+        </section>
+      ) : null}
+
+      <section className="panel header">
+        <div className="headerTop">
+          <h1 className="title">Scriptures with Pictures</h1>
+          <div className="headerActions">
             <button
               type="button"
               className="primaryButton installButton"
@@ -435,7 +444,7 @@ export function BibleClient(): ReactElement {
             </button>
           </div>
         </div>
-        <div className="location">{locationLabel}</div>
+        {activeTab === "upload" ? <div className="location">{locationLabel}</div> : null}
         {installMessage ? <p className="installHint">{installMessage}</p> : null}
         <div className="tabs">
           <button
