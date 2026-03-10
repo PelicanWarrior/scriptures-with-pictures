@@ -8,6 +8,7 @@
   --accent-strong: #095249;
   --line: #d7c9ad;
   --warn: #f4b400;
+  --safe-top: env(safe-area-inset-top, 0px);
 }
 
 * {
@@ -37,7 +38,7 @@ main.page {
 }
 
 main.page.pageWithContextDock {
-  padding-top: calc(20px + 64px);
+  padding-top: calc(20px + 64px + var(--safe-top));
 }
 
 .contextDock {
@@ -46,8 +47,10 @@ main.page.pageWithContextDock {
   left: 0;
   right: 0;
   z-index: 80;
-  background: rgba(255, 248, 235, 0.96);
+  padding-top: var(--safe-top);
+  background: rgba(245, 233, 207, 0.98);
   border-bottom: 1px solid var(--line);
+  box-shadow: 0 8px 18px rgba(42, 30, 18, 0.1);
   backdrop-filter: blur(4px);
 }
 
