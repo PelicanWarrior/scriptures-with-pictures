@@ -20,7 +20,11 @@ export async function GET(_request: NextRequest, context: RouteContext): Promise
     }
 
     const chapterData = await getChapterData(parsedBookId, parsedChapter);
-    return NextResponse.json(chapterData);
+    return NextResponse.json(chapterData, {
+      headers: {
+        "Cache-Control": "public, s-maxage=604800, stale-while-revalidate=1209600",
+      },
+    });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed to load chapter";
     return NextResponse.json({ error: message }, { status: 500 });

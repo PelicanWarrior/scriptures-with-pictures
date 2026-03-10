@@ -15,7 +15,14 @@ export async function GET(_request: NextRequest, context: RouteContext): Promise
     }
 
     const chapters = await getBookChapters(parsedBookId);
-    return NextResponse.json({ bookId: parsedBookId, chapters });
+    return NextResponse.json(
+      { bookId: parsedBookId, chapters },
+      {
+        headers: {
+          "Cache-Control": "public, s-maxage=86400, stale-while-revalidate=604800",
+        },
+      },
+    );
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed to load chapters";
     return NextResponse.json({ error: message }, { status: 500 });

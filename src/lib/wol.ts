@@ -76,12 +76,14 @@ const CANONICAL_BOOK_NAMES: Record<number, string> = {
   66: "Revelation",
 };
 
-async function fetchWolHtml(url: string): Promise<string> {
+async function fetchWolHtml(url: string, revalidateSeconds: number): Promise<string> {
   const response = await fetch(url, {
     headers: {
       "User-Agent": "ScripturesWithPictures/1.0",
     },
-    cache: "no-store",
+    next: {
+      revalidate: revalidateSeconds,
+    },
   });
 
   if (!response.ok) {
@@ -111,7 +113,7 @@ function getChapterUrl(bookId: number, chapter: number): string {
 }
 
 async function loadBibleBooksFromSource(): Promise<BibleBook[]> {
-  const html = await fetchWolHtml(WOL_BOOKS_URL);
+  const html = await fetchWolHtml(WOL_BOOKS_URL, 60 * 60 * 24);
   const $ = cheerio.load(html);
   const booksMap = new Map<number, BibleBook>();
 
@@ -154,7 +156,7 @@ async function loadBookChaptersFromSource(bookId: number): Promise<number[]> {
     throw new Error("Invalid book id");
   }
 
-  const html = await fetchWolHtml(getBookUrl(bookId));
+  const html = await fetchWolHtml(getBookUrl(bookId), 60 * 60 * 24);
   const $ = cheerio.load(html);
   const chapters = new Set<number>();
   const chapterRegex = new RegExp(`/en/wol/b/r1/lp-e/nwtsty/${bookId}/(\\d{1,3})$`);
@@ -216,7 +218,7 @@ async function loadChapterDataFromSource(bookId: number, chapter: number): Promi
     throw new Error("Invalid chapter number");
   }
 
-  const html = await fetchWolHtml(getChapterUrl(bookId, chapter));
+  const html = await fetchWolHtml(getChapterUrl(bookId, chapter), 60 * 60 * 24 * 7);
   const $ = cheerio.load(html);
   const versesMap = new Map<number, string>();
 

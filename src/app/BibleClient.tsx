@@ -21,6 +21,11 @@ interface SaveFormState {
   caption: string;
 }
 
+interface LocalCacheRecord<T> {
+  savedAt: number;
+  data: T;
+}
+
 const INITIAL_FORM_STATE: SaveFormState = {
   bookId: "",
   chapter: "",
@@ -29,12 +34,57 @@ const INITIAL_FORM_STATE: SaveFormState = {
   caption: "",
 };
 
+const LOCAL_CACHE_PREFIX = "swp-local-cache";
+
+function readLocalCache<T>(key: string, maxAgeMs: number): T | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+
+  try {
+    const raw = window.localStorage.getItem(`${LOCAL_CACHE_PREFIX}:${key}`);
+    if (!raw) {
+      return null;
+    }
+
+    const parsed = JSON.parse(raw) as LocalCacheRecord<T>;
+    if (!parsed || typeof parsed.savedAt !== "number") {
+      return null;
+    }
+
+    if (Date.now() - parsed.savedAt > maxAgeMs) {
+      return null;
+    }
+
+    return parsed.data;
+  } catch {
+    return null;
+  }
+}
+
+function writeLocalCache<T>(key: string, data: T): void {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  try {
+    const payload: LocalCacheRecord<T> = {
+      savedAt: Date.now(),
+      data,
+    };
+
+    window.localStorage.setItem(`${LOCAL_CACHE_PREFIX}:${key}`, JSON.stringify(payload));
+  } catch {
+    // Ignore local cache write errors.
+  }
+}
+
 function verseKey(bookId: number, chapter: number, verse: number): string {
   return `${bookId}:${chapter}:${verse}`;
 }
 
 async function fetchJson<T>(url: string): Promise<T> {
-  const response = await fetch(url, { cache: "no-store" });
+  const response = await fetch(url);
   const data = await response.json();
 
   if (!response.ok) {
@@ -101,14 +151,24 @@ export function BibleClient(): ReactElement {
   }, [activeTab, selectedBook, selectedChapter]);
 
   const loadBooks = useCallback(async (): Promise<void> => {
-    setLoading(true);
+    const cachedBooks = readLocalCache<BibleBook[]>("books", 1000 * 60 * 60 * 24 * 30);
+    const hasCachedBooks = Array.isArray(cachedBooks) && cachedBooks.length > 0;
+
+    setLoading(!hasCachedBooks);
     setError("");
+
+    if (hasCachedBooks) {
+      setBooks(cachedBooks);
+    }
 
     try {
       const data = await fetchJson<{ books: BibleBook[] }>("/api/bible/books");
       setBooks(data.books);
+      writeLocalCache("books", data.books);
     } catch (loadError) {
-      setError(loadError instanceof Error ? loadError.message : "Failed to load books");
+      if (!hasCachedBooks) {
+        setError(loadError instanceof Error ? loadError.message : "Failed to load books");
+      }
     } finally {
       setLoading(false);
     }
@@ -163,26 +223,50 @@ export function BibleClient(): ReactElement {
   }, []);
 
   async function loadChapters(book: BibleBook): Promise<void> {
-    setLoading(true);
+    const cacheKey = `book:${book.id}:chapters`;
+    const cachedChapters = readLocalCache<number[]>(cacheKey, 1000 * 60 * 60 * 24 * 30);
+    const hasCachedChapters = Array.isArray(cachedChapters) && cachedChapters.length > 0;
+
+    setLoading(!hasCachedChapters);
     setError("");
+    setSelectedBook(book);
+    setSelectedChapter(null);
+    setChapterData(null);
+    setEntries([]);
+    setSelectedEntry(null);
+
+    if (hasCachedChapters) {
+      setBookChapters(cachedChapters);
+    }
 
     try {
       const data = await fetchJson<{ chapters: number[] }>(`/api/bible/books/${book.id}/chapters`);
-      setSelectedBook(book);
       setBookChapters(data.chapters);
-      setSelectedChapter(null);
-      setChapterData(null);
-      setSelectedEntry(null);
+      writeLocalCache(cacheKey, data.chapters);
     } catch (loadError) {
-      setError(loadError instanceof Error ? loadError.message : "Failed to load chapters");
+      if (!hasCachedChapters) {
+        setError(loadError instanceof Error ? loadError.message : "Failed to load chapters");
+      }
     } finally {
       setLoading(false);
     }
   }
 
   async function loadChapter(book: BibleBook, chapter: number): Promise<void> {
-    setLoading(true);
+    const cacheKey = `book:${book.id}:chapter:${chapter}`;
+    const cachedChapterData = readLocalCache<ChapterData>(cacheKey, 1000 * 60 * 60 * 24 * 90);
+    const hasCachedChapterData = Boolean(cachedChapterData?.verses?.length);
+
+    setLoading(!hasCachedChapterData);
     setError("");
+    setSelectedBook(book);
+    setSelectedChapter(chapter);
+    setEntries([]);
+    setSelectedEntry(null);
+
+    if (cachedChapterData) {
+      setChapterData(cachedChapterData);
+    }
 
     try {
       const [chapterResponse, entriesResponse] = await Promise.all([
@@ -190,13 +274,13 @@ export function BibleClient(): ReactElement {
         fetchJson<{ entries: VerseImageEntry[] }>(`/api/verse-images?bookId=${book.id}&chapter=${chapter}`),
       ]);
 
-      setSelectedBook(book);
-      setSelectedChapter(chapter);
       setChapterData(chapterResponse);
       setEntries(entriesResponse.entries);
-      setSelectedEntry(null);
+      writeLocalCache(cacheKey, chapterResponse);
     } catch (loadError) {
-      setError(loadError instanceof Error ? loadError.message : "Failed to load chapter");
+      if (!hasCachedChapterData) {
+        setError(loadError instanceof Error ? loadError.message : "Failed to load chapter");
+      }
     } finally {
       setLoading(false);
     }
