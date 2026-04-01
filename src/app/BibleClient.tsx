@@ -35,6 +35,8 @@ const INITIAL_FORM_STATE: SaveFormState = {
 };
 
 const LOCAL_CACHE_PREFIX = "swp-local-cache";
+const VERSE_IMAGES_CACHE_KEY = "verse-images";
+const PERSIST_FOREVER_MS = Number.MAX_SAFE_INTEGER;
 
 function readLocalCache<T>(key: string, maxAgeMs: number): T | null {
   if (typeof window === "undefined") {
@@ -81,6 +83,51 @@ function writeLocalCache<T>(key: string, data: T): void {
 
 function verseKey(bookId: number, chapter: number, verse: number): string {
   return `${bookId}:${chapter}:${verse}`;
+}
+
+function parseTimeMs(value: string): number {
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function mergeVerseEntries(
+  localEntries: VerseImageEntry[],
+  remoteEntries: VerseImageEntry[],
+): VerseImageEntry[] {
+  const merged = new Map<string, VerseImageEntry>();
+
+  for (const entry of localEntries) {
+    merged.set(entry.key, entry);
+  }
+
+  for (const entry of remoteEntries) {
+    const existing = merged.get(entry.key);
+    if (!existing) {
+      merged.set(entry.key, entry);
+      continue;
+    }
+
+    const existingUpdated = parseTimeMs(existing.updatedAt);
+    const incomingUpdated = parseTimeMs(entry.updatedAt);
+    merged.set(entry.key, incomingUpdated >= existingUpdated ? entry : existing);
+  }
+
+  return Array.from(merged.values());
+}
+
+function upsertVerseEntry(entries: VerseImageEntry[], incoming: VerseImageEntry): VerseImageEntry[] {
+  const next = entries.filter((entry) => entry.key !== incoming.key);
+  next.push(incoming);
+  return next;
+}
+
+function getLocalVerseEntries(): VerseImageEntry[] {
+  const stored = readLocalCache<VerseImageEntry[]>(VERSE_IMAGES_CACHE_KEY, PERSIST_FOREVER_MS);
+  return Array.isArray(stored) ? stored : [];
+}
+
+function setLocalVerseEntries(entries: VerseImageEntry[]): void {
+  writeLocalCache(VERSE_IMAGES_CACHE_KEY, entries);
 }
 
 async function fetchJson<T>(url: string): Promise<T> {
@@ -265,6 +312,12 @@ export function BibleClient(): ReactElement {
     setEntries([]);
     setSelectedEntry(null);
 
+    const localVerseEntries = getLocalVerseEntries();
+    const localChapterEntries = localVerseEntries.filter(
+      (entry) => entry.bookId === book.id && entry.chapter === chapter,
+    );
+    setEntries(localChapterEntries);
+
     if (cachedChapterData) {
       setChapterData(cachedChapterData);
     }
@@ -276,7 +329,9 @@ export function BibleClient(): ReactElement {
       ]);
 
       setChapterData(chapterResponse);
-      setEntries(entriesResponse.entries);
+      const mergedEntries = mergeVerseEntries(localVerseEntries, entriesResponse.entries);
+      setLocalVerseEntries(mergedEntries);
+      setEntries(mergedEntries.filter((entry) => entry.bookId === book.id && entry.chapter === chapter));
       writeLocalCache(cacheKey, chapterResponse);
     } catch (loadError) {
       if (!hasCachedChapterData) {
@@ -300,6 +355,27 @@ export function BibleClient(): ReactElement {
       caption: formState.caption.trim(),
     };
 
+    const now = new Date().toISOString();
+    const localEntry: VerseImageEntry = {
+      key: verseKey(body.bookId, body.chapter, body.verse),
+      bookId: body.bookId,
+      chapter: body.chapter,
+      verse: body.verse,
+      imageUrl: body.imageUrl,
+      caption: body.caption,
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    const existingLocalEntries = getLocalVerseEntries();
+    const optimisticEntries = upsertVerseEntry(existingLocalEntries, localEntry);
+    setLocalVerseEntries(optimisticEntries);
+
+    if (selectedBook && selectedChapter && selectedBook.id === body.bookId && selectedChapter === body.chapter) {
+      setEntries(optimisticEntries.filter((entry) => entry.bookId === body.bookId && entry.chapter === body.chapter));
+      setSelectedEntry(localEntry);
+    }
+
     try {
       const response = await fetch("/api/verse-images", {
         method: "POST",
@@ -317,6 +393,23 @@ export function BibleClient(): ReactElement {
 
       setSaveMessage("Picture linked to verse successfully.");
 
+      if (data.entry) {
+        const merged = upsertVerseEntry(optimisticEntries, data.entry);
+        setLocalVerseEntries(merged);
+
+        if (
+          selectedBook &&
+          selectedChapter &&
+          selectedBook.id === body.bookId &&
+          selectedChapter === body.chapter
+        ) {
+          setEntries(
+            merged.filter((entry) => entry.bookId === body.bookId && entry.chapter === body.chapter),
+          );
+          setSelectedEntry(data.entry);
+        }
+      }
+
       if (
         selectedBook &&
         selectedChapter &&
@@ -326,7 +419,8 @@ export function BibleClient(): ReactElement {
         await loadChapter(selectedBook, selectedChapter);
       }
     } catch (saveErr) {
-      setSaveError(saveErr instanceof Error ? saveErr.message : "Failed to save image link");
+      setSaveMessage("Picture saved on this device. Cloud sync was unavailable.");
+      setSaveError(saveErr instanceof Error ? saveErr.message : "Failed to sync image link");
     }
   }
 
