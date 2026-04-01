@@ -611,7 +611,7 @@ export function BibleClient(): ReactElement {
         <div className="headerTop">
           <h1 className="title">Scriptures with Pictures</h1>
           <div className="headerActions">
-            {!isInstalled ? (
+            {!isInstalled && deferredPrompt ? (
               <button
                 type="button"
                 className="primaryButton installButton"
