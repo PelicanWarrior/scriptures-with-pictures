@@ -528,14 +528,16 @@ export function BibleClient(): ReactElement {
         <div className="headerTop">
           <h1 className="title">Scriptures with Pictures</h1>
           <div className="headerActions">
-            <button
-              type="button"
-              className="primaryButton installButton"
-              onClick={() => void handleInstallClick()}
-              disabled={isInstalling}
-            >
-              {isInstalled ? "Installed" : isInstalling ? "Installing..." : "Install App"}
-            </button>
+            {!isInstalled ? (
+              <button
+                type="button"
+                className="primaryButton installButton"
+                onClick={() => void handleInstallClick()}
+                disabled={isInstalling}
+              >
+                {isInstalling ? "Installing..." : "Install App"}
+              </button>
+            ) : null}
           </div>
         </div>
         {activeTab === "upload" ? <div className="location">{locationLabel}</div> : null}
