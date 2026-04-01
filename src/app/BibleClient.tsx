@@ -3,6 +3,12 @@
 import Image from "next/image";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { ReactElement } from "react";
+import {
+  getAllVerseImageEntriesFromDb,
+  migrateLegacyVerseImagesFromLocalStorage,
+  upsertVerseImageEntriesInDb,
+  upsertVerseImageEntryInDb,
+} from "@/lib/verse-images-client";
 import { BibleBook, ChapterData, VerseImageEntry } from "@/lib/types";
 
 type ViewLevel = "books" | "chapters" | "chapter";
@@ -37,6 +43,9 @@ const INITIAL_FORM_STATE: SaveFormState = {
 const LOCAL_CACHE_PREFIX = "swp-local-cache";
 const VERSE_IMAGES_CACHE_KEY = "verse-images";
 const PERSIST_FOREVER_MS = Number.MAX_SAFE_INTEGER;
+const INSTALL_STATE_KEY = "app-installed";
+const LOCAL_CACHE_KEY_PREFIX = `${LOCAL_CACHE_PREFIX}:`;
+const LEGACY_VERSE_IMAGES_STORAGE_KEY = `${LOCAL_CACHE_KEY_PREFIX}${VERSE_IMAGES_CACHE_KEY}`;
 
 function readLocalCache<T>(key: string, maxAgeMs: number): T | null {
   if (typeof window === "undefined") {
@@ -44,7 +53,7 @@ function readLocalCache<T>(key: string, maxAgeMs: number): T | null {
   }
 
   try {
-    const raw = window.localStorage.getItem(`${LOCAL_CACHE_PREFIX}:${key}`);
+    const raw = window.localStorage.getItem(`${LOCAL_CACHE_KEY_PREFIX}${key}`);
     if (!raw) {
       return null;
     }
@@ -64,9 +73,9 @@ function readLocalCache<T>(key: string, maxAgeMs: number): T | null {
   }
 }
 
-function writeLocalCache<T>(key: string, data: T): void {
+function writeLocalCache<T>(key: string, data: T): boolean {
   if (typeof window === "undefined") {
-    return;
+    return false;
   }
 
   try {
@@ -75,10 +84,26 @@ function writeLocalCache<T>(key: string, data: T): void {
       data,
     };
 
-    window.localStorage.setItem(`${LOCAL_CACHE_PREFIX}:${key}`, JSON.stringify(payload));
+    window.localStorage.setItem(`${LOCAL_CACHE_KEY_PREFIX}${key}`, JSON.stringify(payload));
+    return true;
   } catch {
-    // Ignore local cache write errors.
+    return false;
   }
+}
+
+function isRunningInstalledApp(): boolean {
+  if (typeof window === "undefined") {
+    return false;
+  }
+
+  const nav = navigator as Navigator & { standalone?: boolean };
+  return (
+    window.matchMedia("(display-mode: standalone)").matches ||
+    window.matchMedia("(display-mode: fullscreen)").matches ||
+    window.matchMedia("(display-mode: minimal-ui)").matches ||
+    nav.standalone === true ||
+    document.referrer.startsWith("android-app://")
+  );
 }
 
 function verseKey(bookId: number, chapter: number, verse: number): string {
@@ -121,13 +146,34 @@ function upsertVerseEntry(entries: VerseImageEntry[], incoming: VerseImageEntry)
   return next;
 }
 
-function getLocalVerseEntries(): VerseImageEntry[] {
-  const stored = readLocalCache<VerseImageEntry[]>(VERSE_IMAGES_CACHE_KEY, PERSIST_FOREVER_MS);
-  return Array.isArray(stored) ? stored : [];
+async function getStoredVerseEntries(): Promise<VerseImageEntry[]> {
+  try {
+    return await getAllVerseImageEntriesFromDb();
+  } catch {
+    const stored = readLocalCache<VerseImageEntry[]>(VERSE_IMAGES_CACHE_KEY, PERSIST_FOREVER_MS);
+    return Array.isArray(stored) ? stored : [];
+  }
 }
 
-function setLocalVerseEntries(entries: VerseImageEntry[]): void {
-  writeLocalCache(VERSE_IMAGES_CACHE_KEY, entries);
+async function persistVerseEntries(entries: VerseImageEntry[]): Promise<boolean> {
+  try {
+    await upsertVerseImageEntriesInDb(entries);
+    return true;
+  } catch {
+    return writeLocalCache(VERSE_IMAGES_CACHE_KEY, entries);
+  }
+}
+
+async function persistVerseEntry(entry: VerseImageEntry): Promise<boolean> {
+  try {
+    await upsertVerseImageEntryInDb(entry);
+    return true;
+  } catch {
+    const existing = readLocalCache<VerseImageEntry[]>(VERSE_IMAGES_CACHE_KEY, PERSIST_FOREVER_MS);
+    const currentEntries = Array.isArray(existing) ? existing : [];
+    const merged = upsertVerseEntry(currentEntries, entry);
+    return writeLocalCache(VERSE_IMAGES_CACHE_KEY, merged);
+  }
 }
 
 async function fetchJson<T>(url: string): Promise<T> {
@@ -227,16 +273,29 @@ export function BibleClient(): ReactElement {
   }, [loadBooks]);
 
   useEffect(() => {
+    void migrateLegacyVerseImagesFromLocalStorage(LEGACY_VERSE_IMAGES_STORAGE_KEY);
+  }, []);
+
+  useEffect(() => {
     if (typeof window === "undefined") {
       return;
     }
 
-    const mediaQuery = window.matchMedia("(display-mode: standalone)");
-    const navigatorWithStandalone = navigator as Navigator & { standalone?: boolean };
+    const mediaQueries = [
+      window.matchMedia("(display-mode: standalone)"),
+      window.matchMedia("(display-mode: fullscreen)"),
+      window.matchMedia("(display-mode: minimal-ui)"),
+    ];
 
     const syncInstalledState = (): void => {
-      const standalone = mediaQuery.matches || navigatorWithStandalone.standalone === true;
-      setIsInstalled(standalone);
+      const detectedInstalled = isRunningInstalledApp();
+
+      if (detectedInstalled) {
+        writeLocalCache(INSTALL_STATE_KEY, true);
+      }
+
+      const rememberedInstalled = readLocalCache<boolean>(INSTALL_STATE_KEY, PERSIST_FOREVER_MS) === true;
+      setIsInstalled(detectedInstalled || rememberedInstalled);
     };
 
     const onBeforeInstallPrompt = (event: Event): void => {
@@ -248,6 +307,7 @@ export function BibleClient(): ReactElement {
     const onAppInstalled = (): void => {
       setDeferredPrompt(null);
       setIsInstalled(true);
+      writeLocalCache(INSTALL_STATE_KEY, true);
       setInstallMessage("App installed successfully.");
     };
 
@@ -261,12 +321,20 @@ export function BibleClient(): ReactElement {
 
     window.addEventListener("beforeinstallprompt", onBeforeInstallPrompt);
     window.addEventListener("appinstalled", onAppInstalled);
-    mediaQuery.addEventListener("change", syncInstalledState);
+    mediaQueries.forEach((mediaQuery) => {
+      mediaQuery.addEventListener("change", syncInstalledState);
+    });
+    window.addEventListener("focus", syncInstalledState);
+    document.addEventListener("visibilitychange", syncInstalledState);
 
     return () => {
       window.removeEventListener("beforeinstallprompt", onBeforeInstallPrompt);
       window.removeEventListener("appinstalled", onAppInstalled);
-      mediaQuery.removeEventListener("change", syncInstalledState);
+      mediaQueries.forEach((mediaQuery) => {
+        mediaQuery.removeEventListener("change", syncInstalledState);
+      });
+      window.removeEventListener("focus", syncInstalledState);
+      document.removeEventListener("visibilitychange", syncInstalledState);
     };
   }, []);
 
@@ -312,7 +380,7 @@ export function BibleClient(): ReactElement {
     setEntries([]);
     setSelectedEntry(null);
 
-    const localVerseEntries = getLocalVerseEntries();
+    const localVerseEntries = await getStoredVerseEntries();
     const localChapterEntries = localVerseEntries.filter(
       (entry) => entry.bookId === book.id && entry.chapter === chapter,
     );
@@ -330,7 +398,10 @@ export function BibleClient(): ReactElement {
 
       setChapterData(chapterResponse);
       const mergedEntries = mergeVerseEntries(localVerseEntries, entriesResponse.entries);
-      setLocalVerseEntries(mergedEntries);
+      const mergedSaved = await persistVerseEntries(mergedEntries);
+      if (!mergedSaved) {
+        setSaveError("Unable to update local picture storage because device storage is full.");
+      }
       setEntries(mergedEntries.filter((entry) => entry.bookId === book.id && entry.chapter === chapter));
       writeLocalCache(cacheKey, chapterResponse);
     } catch (loadError) {
@@ -367,9 +438,16 @@ export function BibleClient(): ReactElement {
       updatedAt: now,
     };
 
-    const existingLocalEntries = getLocalVerseEntries();
+    const existingLocalEntries = await getStoredVerseEntries();
     const optimisticEntries = upsertVerseEntry(existingLocalEntries, localEntry);
-    setLocalVerseEntries(optimisticEntries);
+    const savedLocally = await persistVerseEntries(optimisticEntries);
+
+    if (!savedLocally) {
+      setSaveError(
+        "Your device storage is full. Picture could not be saved locally. Free some space and try again.",
+      );
+      return;
+    }
 
     if (selectedBook && selectedChapter && selectedBook.id === body.bookId && selectedChapter === body.chapter) {
       setEntries(optimisticEntries.filter((entry) => entry.bookId === body.bookId && entry.chapter === body.chapter));
@@ -395,7 +473,10 @@ export function BibleClient(): ReactElement {
 
       if (data.entry) {
         const merged = upsertVerseEntry(optimisticEntries, data.entry);
-        setLocalVerseEntries(merged);
+        const mergedSaved = await persistVerseEntry(data.entry);
+        if (!mergedSaved) {
+          setSaveError("Picture synced, but local storage is full so local backup could not be updated.");
+        }
 
         if (
           selectedBook &&
@@ -498,6 +579,8 @@ export function BibleClient(): ReactElement {
       const choice = await deferredPrompt.userChoice;
 
       if (choice.outcome === "accepted") {
+        writeLocalCache(INSTALL_STATE_KEY, true);
+        setIsInstalled(true);
         setInstallMessage("Install request accepted.");
       } else {
         setInstallMessage("Install canceled.");

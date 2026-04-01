@@ -27,7 +27,7 @@ npm run build
 
 - Browse Bible books, chapters, and full chapter text.
 - Add image URL and caption to a selected verse.
-- Verse image links are persisted in browser localStorage so they survive app redeploys on the same browser/device.
+- Verse image links are persisted in IndexedDB (with localStorage fallback), improving durability on mobile and surviving app redeploys on the same browser/device.
 - See markers next to verses that have linked pictures.
 - Click a verse to show its linked image and caption.
 - See current location at the top (`Book` or `Book Chapter N`) and use back navigation.
